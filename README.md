@@ -8,3 +8,8 @@ The approach is simple:
 
 2. Fine-Tune the pre-trained model backbone using Detectron2 for any downstream task
 
+
+References:
+
+FAIR-DINO - https://github.com/facebookresearch/dino
+FAIR-Detectron2 - https://github.com/facebookresearch/detectron2
