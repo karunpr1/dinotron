@@ -1,21 +1,22 @@
 import torch
 from detectron2.utils.logger import setup_logger
-setup_logger('detectron2')
 from detectron2.engine import DefaultTrainer
 from detectron2.data import DatasetCatalog, MetadataCatalog
 from detectron2.utils.visualizer import Visualizer, ColorMode
 from detectron2.config import get_cfg
-from detectron2.evaluation import COCOEvaluator, inference_on_dataset
+from detectron2.evaluation import COCOEvaluator, inference_on_dataset, print_csv_format
 from detectron2.data import build_detection_test_loader, build_detection_train_loader
 from detectron2.structures import BoxMode
-
-
 import random
 import cv2
 import matplotlib.pyplot as plt
 import os
 import pickle
 import json
+import logging
+
+setup_logger('detectron2_log')
+logger = logging.getLogger("detectron2_log")
 
 
 def get_image_dicts(img_dir):
@@ -97,7 +98,9 @@ def plot_samples(dataset_name, n=1):
         plt.show()
 
 
-def get_train_cfg(config_file_path, pretrained_weights, train_dataset_name, test_dataset_name, num_classes, device, output_dir):
+def get_train_cfg(config_file_path, pretrained_weights, train_dataset_name, test_dataset_name, num_classes, device,
+                  output_dir, num_workers, img_per_batch, base_lr, max_iters, batch_size_per_image, steps, gamma,
+                  warmup_iters, score_thresh_test):
     """
     Get the configuration for training the Detectron2 model.
 
@@ -109,6 +112,15 @@ def get_train_cfg(config_file_path, pretrained_weights, train_dataset_name, test
         num_classes (int): Number of classes in the dataset.
         device (str): Device to use for training ('cuda' or 'cpu').
         output_dir (str): Directory to save the output model and logs.
+        num_workers (int): Number of worker threads used for data loading.
+        img_per_batch (int): Number of images processed in each batch during training.
+        base_lr (float): Initial learning rate for the optimizer.
+        max_iters (int): Maximum number of iterations (batches) to be executed during training.
+        batch_size_per_image (int): Number of samples (e.g., region proposals or anchors) used per image during training.
+        steps (list): List of iteration indices where the learning rate will be reduced by a factor of `gamma`.
+        gamma (float): Factor by which the learning rate is multiplied at each step specified in `steps`.
+        warmup_iters (int): Number of iterations for the warmup phase where the learning rate is gradually increased to the base learning rate.
+        score_thresh_test (float): Threshold for filtering out low-confidence detections during inference.
 
     Returns:
         CfgNode: Configuration node with the specified settings.
@@ -117,31 +129,27 @@ def get_train_cfg(config_file_path, pretrained_weights, train_dataset_name, test
 
     cfg.merge_from_file(config_file_path)
     cfg.MODEL.WEIGHTS = pretrained_weights
-    cfg.DATASETS.TRAIN = (train_dataset_name, )
-    cfg.DATASETS.TEST = (test_dataset_name, )
+    cfg.DATASETS.TRAIN = (train_dataset_name,)
+    cfg.DATASETS.TEST = (test_dataset_name,)
 
-    cfg.DATALOADER.NUM_WORKERS = 8
+    cfg.DATALOADER.NUM_WORKERS = num_workers
 
-    cfg.SOLVER.IMS_PER_BATCH = 2
-    cfg.SOLVER.BASE_LR = 0.001
-    cfg.SOLVER.MAX_ITER = 18000
-    cfg.MODEL.ROI_HEADS.BATCH_SIZE_PER_IMAGE = 512
-    cfg.SOLVER.STEPS = (12000, 16000)
-    cfg.SOLVER.GAMMA = 0.1
-    cfg.SOLVER.WARMUP_ITERS = 3000
+    cfg.SOLVER.IMS_PER_BATCH = img_per_batch
+    cfg.SOLVER.BASE_LR = base_lr
+    cfg.SOLVER.MAX_ITER = max_iters
+    cfg.MODEL.ROI_HEADS.BATCH_SIZE_PER_IMAGE = batch_size_per_image
+    cfg.SOLVER.STEPS = tuple(steps)
+    cfg.SOLVER.GAMMA = gamma
+    cfg.SOLVER.WARMUP_ITERS = warmup_iters
 
     cfg.MODEL.ROI_HEADS.NUM_CLASSES = num_classes
     cfg.MODEL.DEVICE = device
-    cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = 0.5
+    cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = score_thresh_test
     cfg.OUTPUT_DIR = output_dir
 
+    cfg.freeze()
+
     return cfg
-
-
-def get_test_cfg(config_file_path):
-    # TODO: Add logic to get cfg from the pickle file
-    with open(config_file_path, 'rb') as f:
-        cfg = pickle.load(f)
 
 
 def load_checkpoint(filepath):
@@ -186,12 +194,40 @@ def adapt_state_dict(state_dict):
     return new_state_dict
 
 
-# Custom class to load pre-trained DINO ResNet50 backbone (student network)
 class CustomTrainer(DefaultTrainer):
+    @classmethod
+    def build_model(cls, cfg):
+        model = super().build_model(cfg)
+        return model
+
+    @classmethod
+    def build_train_loader(cls, cfg):
+        return build_detection_train_loader(cfg)
+
+    def resume_or_load(self, resume=True):
+        if resume and os.path.isfile(os.path.join(self.cfg.OUTPUT_DIR, "last_checkpoint")):
+            super().resume_or_load(resume)
+        else:
+            # Load only the model weights
+            checkpoint = load_checkpoint(self.cfg.MODEL.WEIGHTS)
+            if 'state_dict' in checkpoint:
+                state_dict = checkpoint['state_dict']
+            elif 'model_state_dict' in checkpoint:
+                state_dict = checkpoint['model_state_dict']
+            else:
+                raise KeyError("The checkpoint does not contain a valid state_dict key.")
+
+            adapted_state_dict = adapt_state_dict(state_dict)
+            self.model.load_state_dict(adapted_state_dict, strict=False)
+
+
+# Custom class to load pre-trained DINO ResNet50 backbone (student network)
+class CustomTrainerStudent(DefaultTrainer):
     """
     Custom trainer class that extends the Detectron2 DefaultTrainer to load a
     pre-trained DINO ResNet50 backbone (student network) for model training.
     """
+
     @classmethod
     def build_model(cls, cfg):
         """
@@ -253,6 +289,74 @@ class CustomTrainer(DefaultTrainer):
             self.model.load_state_dict(adapted_state_dict, strict=False)
 
 
+# Custom class to load pre-trained DINO ResNet50 backbone (Teacher network)
+class CustomTrainerTeacher(DefaultTrainer):
+    """
+    Custom trainer class that extends the Detectron2 DefaultTrainer to load a
+    pre-trained DINO ResNet50 backbone (teacher network) for model training.
+    """
+
+    @classmethod
+    def build_model(cls, cfg):
+        """
+        Build the model based on the provided configuration.
+
+        Args:
+            cfg (CfgNode): The configuration object for the model.
+
+        Returns:
+            nn.Module: The constructed model.
+        """
+        model = super().build_model(cfg)
+        return model
+
+    @classmethod
+    def build_train_loader(cls, cfg):
+        """
+        Build the data loader for training.
+
+        Args:
+            cfg (CfgNode): The configuration object for the data loader.
+
+        Returns:
+            DataLoader: The data loader for training.
+        """
+        return build_detection_train_loader(cfg)
+
+    def resume_or_load(self, resume=True):
+        """
+        Resume training from a checkpoint or load a pre-trained model.
+
+        Args:
+            resume (bool): If True, resumes training from the last checkpoint. If False or
+                           if no checkpoint exists, loads the model from the pre-trained weights
+                           specified in the configuration.
+
+        Raises:
+            KeyError: If the checkpoint does not contain a 'teacher' key.
+
+        Behavior:
+            - If a checkpoint exists in the output directory and `resume` is True, resumes
+              training from the checkpoint.
+            - Otherwise, loads the specified checkpoint, extracts the 'teacher' weights, adapts
+              the state dictionary, and loads it into the model.
+        """
+        if resume and os.path.isfile(os.path.join(self.cfg.OUTPUT_DIR, "last_checkpoint")):
+            super().resume_or_load(resume)
+        else:
+            # Load the checkpoint
+            checkpoint = load_checkpoint(self.cfg.MODEL.WEIGHTS)
+
+            # Extract the 'teacher' weights
+            if 'teacher' in checkpoint:
+                state_dict = checkpoint['teacher']
+            else:
+                raise KeyError("The checkpoint does not contain a 'teacher' key.")
+
+            adapted_state_dict = adapt_state_dict(state_dict)
+            self.model.load_state_dict(adapted_state_dict, strict=False)
+
+
 def test_image(dataset_name, predictor, n=2, threshold=0.5):
     """
     Perform inference on a random sample of images from the dataset and visualize the results.
@@ -294,5 +398,12 @@ def coco_evaluator(cfg, predictor, test_dataset_name):
     """
     evaluator = COCOEvaluator(test_dataset_name, output_dir=cfg.OUTPUT_DIR)
     val_loader = build_detection_test_loader(cfg, test_dataset_name)
-    print(inference_on_dataset(predictor.model, val_loader, evaluator))
+    results = inference_on_dataset(predictor.model, val_loader, evaluator)
+    logger.info("Evaluation results for {} in csv format:".format(test_dataset_name))
+    print_csv_format(results)
 
+
+def get_test_cfg(config_file_path):
+    with open(config_file_path, 'rb') as f:
+        cfg = pickle.load(f)
+    return cfg
