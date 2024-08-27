@@ -147,6 +147,8 @@ def get_train_cfg(config_file_path, pretrained_weights, train_dataset_name, test
     cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = score_thresh_test
     cfg.OUTPUT_DIR = output_dir
 
+    cfg.freeze()
+
     return cfg
 
 
@@ -399,3 +401,9 @@ def coco_evaluator(cfg, predictor, test_dataset_name):
     results = inference_on_dataset(predictor.model, val_loader, evaluator)
     logger.info("Evaluation results for {} in csv format:".format(test_dataset_name))
     print_csv_format(results)
+
+
+def get_test_cfg(config_file_path):
+    with open(config_file_path, 'rb') as f:
+        cfg = pickle.load(f)
+    return cfg

@@ -8,6 +8,8 @@ import pickle
 from omegaconf import DictConfig
 from scripts.detectron_utils import *
 from scripts.train_object_detection import *
+from scripts.test_object_detection import *
+
 setup_logger('detectron2_log')
 
 cs = ConfigStore.instance()
@@ -32,7 +34,7 @@ def main(cfg: DetectronConfig):
 
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
-        print(f"Directory {output_dir} created.")
+        logger.info(f"Directory {output_dir} created.")
 
     with open(os.path.join(output_dir, f'{config_save_file}'), 'wb') as f:
         pickle.dump(dtron_config, f, protocol=pickle.HIGHEST_PROTOCOL)
@@ -40,12 +42,17 @@ def main(cfg: DetectronConfig):
     register_dataset(train_dataset_name, cfg.paths.train_data_path, classes=cfg.data.classes)
     register_dataset(test_dataset_name, cfg.paths.train_data_path, classes=cfg.data.classes)
 
-    print(f"Saving model files to path: {output_dir}")
+    logger.info(f"Saving model files to path: {output_dir}")
 
     if cfg.params.backbone == "resnet50" and cfg.params.trainer == "default":
+        logger.info(f"Starting training with Default Trainer")
         return train_with_default_trainer(dtron_config, resume=cfg.params.resume)
     if cfg.params.backbone == "resnet50" and cfg.params.trainer == "custom":
+        logger.info(f"Starting training with Custom Trainer")
         return train_with_custom_trainer(dtron_config, resume=cfg.params.resume)
+
+    load_config_file = os.path.join(output_dir, config_save_file)
+    do_coco_eval(load_config_file)
 
 
 if __name__ == '__main__':
