@@ -46,10 +46,10 @@ def main(cfg: DetectronConfig):
 
     if cfg.params.backbone == "resnet50" and cfg.params.trainer == "default":
         logger.info(f"Starting training with Default Trainer")
-        return train_with_default_trainer(dtron_config, resume=cfg.params.resume)
+        train_with_default_trainer(dtron_config, resume=cfg.params.resume)
     if cfg.params.backbone == "resnet50" and cfg.params.trainer == "custom":
         logger.info(f"Starting training with Custom Trainer")
-        return train_with_custom_trainer(dtron_config, resume=cfg.params.resume)
+        train_with_custom_trainer(dtron_config, resume=cfg.params.resume)
 
     load_config_file = os.path.join(output_dir, config_save_file)
     do_coco_eval(load_config_file)
