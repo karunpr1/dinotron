@@ -45,7 +45,9 @@ class Params:
     num_workers: int = 10
     dist_url: str = "env://"
     local_rank: int = 0
-
+    rank: int = 0
+    world_size: int = 0
+    gpu: int = 0
 
 @dataclass
 class DinoConfig:

@@ -30,3 +30,6 @@ params:
   num_workers: 10
   dist_url: env://
   local_rank: 0
+  rank: 0
+  world_size: 1
+  gpu: 0
