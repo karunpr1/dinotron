@@ -1,37 +1,41 @@
 params:
- final_model_name: dino_rpl
+ final_model_name: dinotron_merged_price_labels
  pretrain_method: dino
  backbone: resnet50
  trainer: default # custom,student,teacher
  max_epochs: 400
- resume: False
+ resume: True
  device: cuda  # cpu
  devices: [0]
 
 paths:
- merge_config_file: ${hydra:runtime.cwd}/merge_configs/faster_rcnn_R_50_C4_3x.yaml
- pretrained_weights: detectron2://ImageNetPretrained/MSRA/R-50.pkl
- train_data_path: /home/karun95/master_thesis/datasets/russian_price_labels_dataset/russian_price_labels/price_labels_train/
- train_annotations_file: _annotations.coco.json
- test_data_path: /home/karun95/master_thesis/datasets/russian_price_labels_dataset/russian_price_labels/price_labels_test/
- test_annotations_file: _annotations.coco.json
- output_dir: ./detectron_output
+ merge_config_file: ${hydra:runtime.cwd}/merge_configs/faster_rcnn_R_50_C4_1x.yaml
+ pretrained_weights: /home/karun95/notebooks/merged_pricetag_dinotron_model.pkl # detectron2://ImageNetPretrained/MSRA/R-50.pkl
+ train_image_path: /home/karun95/master_thesis/datasets/esl_price_tags_dataset/esl_detection/train_dir/train_img_dir
+ train_annotations_file: /home/karun95/master_thesis/datasets/esl_price_tags_dataset/esl_detection/train_dir/_modified_annotations.coco.json
+ test_image_path: /home/karun95/master_thesis/datasets/esl_price_tags_dataset/esl_detection/test_dir/test_img_dir
+ test_annotations_file: /home/karun95/master_thesis/datasets/esl_price_tags_dataset/esl_detection/test_dir/_modified_annotations.coco.json
+ output_dir: dinotron_mpl_experiments
+ config_save_name: dinotron_price_labels
+ pickle_config_file_path: /home/karun95/dinotron/dinotron/downstream/object_detection/detectron_output/dinotron_mpl_experiments/dinotron_merged_price_labels_config.pkl
 
 data:
- dataset_name: russian_price_labels
+ dataset_name: esl_detection_100perc
  label_fraction: 100 # in percent
- num_classes: 5
+ num_classes: 1
  num_workers: 4
- classes: ["text", "name", "old_price", "price", "promotion"]
+ classes: ["price_label"]
+ register_dataset: auto # manual
 
 model:
  score_thresh_test: 0.5
  batch_size_per_image: 512
+ backbone_freeze_at: 4
 
 solver:
  img_per_batch: 2
- base_lr: 0.000125
- max_iters: 18000
+ base_lr: 0.00025
+ max_iters: 2000
  steps: [12000, 16000]
  gamma: 0.1
  warmup_iters: 1000

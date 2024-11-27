@@ -17,11 +17,13 @@ class Params:
 class Paths:
     merge_config_file: str
     pretrained_weights: str
-    train_data_path: str
+    train_image_path: str
     train_annotations_file: str
-    test_data_path: str
+    test_image_path: str
     test_annotations_file: str
     output_dir: str
+    config_save_name: str
+    pickle_config_file_path: str
 
 
 @dataclass
@@ -31,12 +33,14 @@ class Data:
     num_classes: int
     num_workers: int
     classes: list
+    register_dataset: str
 
 
 @dataclass
 class Model:
     score_thresh_test: float
     batch_size_per_image: int
+    backbone_freeze_at: int
 
 
 @dataclass
