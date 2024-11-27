@@ -17,9 +17,10 @@ class Params:
 class Paths:
     merge_config_file: str
     pretrained_weights: str
-    annotations_file: str
     train_data_path: str
+    train_annotations_file: str
     test_data_path: str
+    test_annotations_file: str
     output_dir: str
 
 

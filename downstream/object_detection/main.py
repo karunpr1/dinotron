@@ -39,8 +39,10 @@ def main(cfg: DetectronConfig):
     with open(os.path.join(output_dir, f'{config_save_file}'), 'wb') as f:
         pickle.dump(dtron_config, f, protocol=pickle.HIGHEST_PROTOCOL)
 
-    register_dataset(train_dataset_name, cfg.paths.train_data_path, classes=cfg.data.classes)
-    register_dataset(test_dataset_name, cfg.paths.train_data_path, classes=cfg.data.classes)
+    register_dataset(dataset_name=train_dataset_name, annotation_file=cfg.paths.train_annotations_file,
+                     dataset_dir=cfg.paths.train_data_path, classes=cfg.data.classes)
+    register_dataset(dataset_name=test_dataset_name, annotation_file=cfg.paths.test_annotations_file,
+                     dataset_dir=cfg.paths.train_data_path, classes=cfg.data.classes)
 
     logger.info(f"Saving model files to path: {output_dir}")
 

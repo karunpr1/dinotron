@@ -19,18 +19,18 @@ setup_logger('detectron2_log')
 logger = logging.getLogger("detectron2_log")
 
 
-def get_image_dicts(img_dir):
+def get_image_dicts(img_dir, json_path):
     """
     Load and parse the COCO annotations JSON file for the given image directory.
 
     Args:
-        img_dir (str): Directory containing the image data and COCO annotations JSON file.
+        img_dir (str): Directory containing the image data
+        json_path (str): File path to the COCO annotations JSON file
 
     Returns:
         list: A list of dictionaries, each representing an image and its annotations.
     """
-    json_file = os.path.join(img_dir, "_annotations.coco.json")
-    with open(json_file) as f:
+    with open(json_path) as f:
         coco_dict = json.load(f)
 
     dataset_dicts = []
@@ -62,7 +62,7 @@ def get_image_dicts(img_dir):
     return dataset_dicts
 
 
-def register_dataset(dataset_name: str, dataset_dir: str, classes: list):
+def register_dataset(dataset_name: str, annotation_file:str, dataset_dir: str, classes: list):
     """
     Registers a dataset with a given name, directory, and list of classes.
 
@@ -70,11 +70,12 @@ def register_dataset(dataset_name: str, dataset_dir: str, classes: list):
         dataset_name (str): The name to register the dataset under.
         dataset_dir (str): The directory where the dataset is stored.
         classes (list): A list of class names corresponding to the dataset.
+        annotation_file (str): File path to the COCO annotations JSON file
 
     Returns:
         dict: A dictionary containing the registered dataset information.
     """
-    DatasetCatalog.register(dataset_name, lambda: get_image_dicts(dataset_dir))
+    DatasetCatalog.register(dataset_name, lambda: get_image_dicts(dataset_dir, annotation_file))
     MetadataCatalog.get(dataset_name).set(thing_classes=classes)
 
 
