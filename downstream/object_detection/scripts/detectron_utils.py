@@ -2,6 +2,7 @@ import torch
 from detectron2.utils.logger import setup_logger
 from detectron2.engine import DefaultTrainer
 from detectron2.data import DatasetCatalog, MetadataCatalog
+from detectron2.data.datasets import register_coco_instances
 from detectron2.utils.visualizer import Visualizer, ColorMode
 from detectron2.config import get_cfg
 from detectron2.evaluation import COCOEvaluator, inference_on_dataset, print_csv_format
@@ -19,25 +20,25 @@ setup_logger('detectron2_log')
 logger = logging.getLogger("detectron2_log")
 
 
-def get_image_dicts(img_dir):
+def get_image_dicts(img_dir, json_path):
     """
     Load and parse the COCO annotations JSON file for the given image directory.
 
     Args:
-        img_dir (str): Directory containing the image data and COCO annotations JSON file.
+        img_dir (str): Directory containing the image data
+        json_path (str): File path to the COCO annotations JSON file
 
     Returns:
         list: A list of dictionaries, each representing an image and its annotations.
     """
-    json_file = os.path.join(img_dir, "_annotations.coco.json")
-    with open(json_file) as f:
+    with open(json_path) as f:
         coco_dict = json.load(f)
 
     dataset_dicts = []
     for img_data in coco_dict['images']:
         record = {}
 
-        filename = os.path.join(img_dir, 'images', img_data["file_name"])
+        filename = os.path.join(img_dir, img_data["file_name"])
         height, width = img_data["height"], img_data["width"]
 
         record["file_name"] = filename
@@ -62,7 +63,7 @@ def get_image_dicts(img_dir):
     return dataset_dicts
 
 
-def register_dataset(dataset_name: str, dataset_dir: str, classes: list):
+def register_dataset(dataset_name: str, annotation_file:str, dataset_dir: str, classes: list, mode: str):
     """
     Registers a dataset with a given name, directory, and list of classes.
 
@@ -70,11 +71,17 @@ def register_dataset(dataset_name: str, dataset_dir: str, classes: list):
         dataset_name (str): The name to register the dataset under.
         dataset_dir (str): The directory where the dataset is stored.
         classes (list): A list of class names corresponding to the dataset.
+        annotation_file (str): File path to the COCO annotations JSON file
+        mode (str): Mode of registering the dataset to detectron2 framework
 
     Returns:
         dict: A dictionary containing the registered dataset information.
     """
-    DatasetCatalog.register(dataset_name, lambda: get_image_dicts(dataset_dir))
+    if mode == "manual":
+        DatasetCatalog.register(dataset_name, lambda: get_image_dicts(dataset_dir, annotation_file))
+    else:
+        register_coco_instances(dataset_name, {}, annotation_file, dataset_dir)
+
     MetadataCatalog.get(dataset_name).set(thing_classes=classes)
 
 
@@ -100,7 +107,7 @@ def plot_samples(dataset_name, n=1):
 
 def get_train_cfg(config_file_path, pretrained_weights, train_dataset_name, test_dataset_name, num_classes, device,
                   output_dir, num_workers, img_per_batch, base_lr, max_iters, batch_size_per_image, steps, gamma,
-                  warmup_iters, score_thresh_test):
+                  warmup_iters, score_thresh_test, backbone_freeze_at):
     """
     Get the configuration for training the Detectron2 model.
 
@@ -121,6 +128,7 @@ def get_train_cfg(config_file_path, pretrained_weights, train_dataset_name, test
         gamma (float): Factor by which the learning rate is multiplied at each step specified in `steps`.
         warmup_iters (int): Number of iterations for the warmup phase where the learning rate is gradually increased to the base learning rate.
         score_thresh_test (float): Threshold for filtering out low-confidence detections during inference.
+        backbone_freeze_at (int): blocks the gradients at the specified convolutional layer
 
     Returns:
         CfgNode: Configuration node with the specified settings.
@@ -143,6 +151,7 @@ def get_train_cfg(config_file_path, pretrained_weights, train_dataset_name, test
     cfg.SOLVER.WARMUP_ITERS = warmup_iters
 
     cfg.MODEL.ROI_HEADS.NUM_CLASSES = num_classes
+    cfg.MODEL.BACKBONE.FREEZE_AT = backbone_freeze_at
     cfg.MODEL.DEVICE = device
     cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = score_thresh_test
     cfg.OUTPUT_DIR = output_dir
@@ -407,3 +416,10 @@ def get_test_cfg(config_file_path):
     with open(config_file_path, 'rb') as f:
         cfg = pickle.load(f)
     return cfg
+
+def display_dataset_details(dataset_name):
+    dataset_dicts = DatasetCatalog.get(dataset_name)
+    dataset_metadata = MetadataCatalog.get(dataset_name)
+
+    print(f"Number of samples in {dataset_name}: {len(dataset_dicts)}")
+    print(f"{dataset_name} dataset thing_classes: {dataset_metadata.thing_classes}")
