@@ -127,6 +127,12 @@ def get_args_parser():
     parser.add_argument("--dist_url", default="env://", type=str, help="""url used to set up
         distributed training; see https://pytorch.org/docs/stable/distributed.html""")
     parser.add_argument("--local_rank", default=0, type=int, help="Please ignore and do not set this argument.")
+
+    parser.add_argument('--dataset_name', default='ImageNet', type=str, help="Name of the dataset used for training.")
+    parser.add_argument('--experiment_name', default='DINO_pre-training', type=str, help="Name of the experiment.")
+    parser.add_argument('--run_name', default='default_run', type=str, help="Name of the specific run.")
+    parser.add_argument('--tag', default='default', type=str, help="Name of the group tag.")
+
     return parser
 
 def train_dino_with_mlflow(args):
@@ -135,23 +141,24 @@ def train_dino_with_mlflow(args):
     Logs arguments, metrics, and artifacts during training.
     """
     # Initialize MLflow
-    mlflow.set_tracking_uri("http://localhost:5000")  # Replace with your tracking URI
-    mlflow.set_experiment("DINO_Training")  # Replace with your experiment name
+    mlflow.set_tracking_uri('http://localhost:5000')  # Replace with your tracking URI
+    mlflow.set_experiment(args.experiment_name)
+    mlflow.autolog(log_models=False, log_input_examples=False, log_datasets=False)
     mlflow.enable_system_metrics_logging()
 
-    with mlflow.start_run(run_name="DINO_Training_Run"):
+    with mlflow.start_run(run_name=args.run_name):
         # Log all arguments as parameters
+        mlflow.log_param('Dataset', args.dataset_name)
+        mlflow.set_tag('tag', args.tag)
+        mlflow.log_dict(args, "model_params.yml")
         for key, value in vars(args).items():
             mlflow.log_param(key, value)
 
         # Train the DINO model and log metrics
         train_dino(args)
-
-        # Log the output directory as artifacts
         mlflow.log_artifacts(args.output_dir)
-        mlflow.end_run()
-
-        print("Training completed. Metrics and artifacts logged to MLflow.")
+    print("Training completed. Metrics and artifacts logged to MLflow.")
+    mlflow.end_run(status='FINISHED')
 
 
 def train_dino(args):
@@ -314,7 +321,6 @@ def train_dino(args):
         if args.saveckp_freq and epoch % args.saveckp_freq == 0:
             checkpoint_path = os.path.join(args.output_dir, f'checkpoint{epoch:04}.pth')
             utils.save_on_master(save_dict, os.path.join(args.output_dir, checkpoint_path))
-            mlflow.log_artifact(checkpoint_path)
         log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
                      'epoch': epoch}
         if utils.is_main_process():
