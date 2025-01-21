@@ -21,6 +21,8 @@ class Paths:
     train_annotations_file: str
     test_image_path: str
     test_annotations_file: str
+    validation_image_path: str
+    validation_annotations_file: str
     output_dir: str
     config_save_name: str
     pickle_config_file_path: str
@@ -41,6 +43,7 @@ class Model:
     score_thresh_test: float
     batch_size_per_image: int
     backbone_freeze_at: int
+    test_eval: int
 
 
 @dataclass
@@ -52,6 +55,13 @@ class Solver:
     gamma: float
     warmup_iters: int
 
+@dataclass
+class Mlfow:
+    tracking_uri: str
+    experiment_name: str
+    run_name: str
+    run_description: str
+
 
 @dataclass
 class DetectronConfig:
@@ -60,3 +70,4 @@ class DetectronConfig:
     data: Data
     model: Model
     solver: Solver
+    mlflow: Mlfow

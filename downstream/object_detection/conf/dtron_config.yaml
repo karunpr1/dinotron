@@ -2,7 +2,7 @@ params:
  final_model_name: dinotron_merged_price_labels
  pretrain_method: dino
  backbone: resnet50
- trainer: default # custom,student,teacher
+ trainer: custom # default, custom
  max_epochs: 400
  resume: True
  device: cuda  # cpu
@@ -15,6 +15,8 @@ paths:
  train_annotations_file: /home/karun95/master_thesis/datasets/esl_price_tags_dataset/esl_detection/train_dir/_modified_annotations.coco.json
  test_image_path: /home/karun95/master_thesis/datasets/esl_price_tags_dataset/esl_detection/test_dir/test_img_dir
  test_annotations_file: /home/karun95/master_thesis/datasets/esl_price_tags_dataset/esl_detection/test_dir/_modified_annotations.coco.json
+ validation_image_path: /home/karun95/master_thesis/datasets/esl_price_tags_dataset/esl_detection/val_dir/val_img_dir
+ validation_annotations_file: /home/karun95/master_thesis/datasets/esl_price_tags_dataset/esl_detection/val_dir/_modified_annotations.coco.json
  output_dir: dinotron_mpl_experiments
  config_save_name: dinotron_price_labels
  pickle_config_file_path: /home/karun95/dinotron/dinotron/downstream/object_detection/detectron_output/dinotron_mpl_experiments/dinotron_merged_price_labels_config.pkl
@@ -31,13 +33,18 @@ model:
  score_thresh_test: 0.5
  batch_size_per_image: 512
  backbone_freeze_at: 4
+ test_eval: 200
 
 solver:
  img_per_batch: 2
  base_lr: 0.00025
- max_iters: 2000
+ max_iters: 400
  steps: [12000, 16000]
  gamma: 0.1
  warmup_iters: 1000
 
-
+mlflow:
+ tracking_uri: "http://localhost:5000"
+ experiment_name: price_labels
+ run_name: price_test
+ run_description: price_labels fine tuning

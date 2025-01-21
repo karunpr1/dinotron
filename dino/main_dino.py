@@ -33,6 +33,7 @@ from torchvision import models as torchvision_models
 import utils
 import vision_transformer as vits
 from vision_transformer import DINOHead
+import mlflow
 
 torchvision_archs = sorted(name for name in torchvision_models.__dict__
     if name.islower() and not name.startswith("__")
@@ -126,7 +127,38 @@ def get_args_parser():
     parser.add_argument("--dist_url", default="env://", type=str, help="""url used to set up
         distributed training; see https://pytorch.org/docs/stable/distributed.html""")
     parser.add_argument("--local_rank", default=0, type=int, help="Please ignore and do not set this argument.")
+
+    parser.add_argument('--dataset_name', default='ImageNet', type=str, help="Name of the dataset used for training.")
+    parser.add_argument('--experiment_name', default='DINO_pre-training', type=str, help="Name of the experiment.")
+    parser.add_argument('--run_name', default='default_run', type=str, help="Name of the specific run.")
+    parser.add_argument('--tag', default='default', type=str, help="Name of the group tag.")
+
     return parser
+
+def train_dino_with_mlflow(args):
+    """
+    Train the DINO model with MLflow integration.
+    Logs arguments, metrics, and artifacts during training.
+    """
+    # Initialize MLflow
+    mlflow.set_tracking_uri('http://localhost:5000')  # Replace with your tracking URI
+    mlflow.set_experiment(args.experiment_name)
+    mlflow.autolog(log_models=False, log_input_examples=False, log_datasets=False)
+    mlflow.enable_system_metrics_logging()
+
+    with mlflow.start_run(run_name=args.run_name):
+        # Log all arguments as parameters
+        mlflow.log_param('Dataset', args.dataset_name)
+        mlflow.set_tag('tag', args.tag)
+        mlflow.log_dict(args, "model_params.yml")
+        for key, value in vars(args).items():
+            mlflow.log_param(key, value)
+
+        # Train the DINO model and log metrics
+        train_dino(args)
+        mlflow.log_artifacts(args.output_dir)
+    print("Training completed. Metrics and artifacts logged to MLflow.")
+    mlflow.end_run(status='FINISHED')
 
 
 def train_dino(args):
@@ -287,14 +319,17 @@ def train_dino(args):
             save_dict['fp16_scaler'] = fp16_scaler.state_dict()
         utils.save_on_master(save_dict, os.path.join(args.output_dir, 'checkpoint.pth'))
         if args.saveckp_freq and epoch % args.saveckp_freq == 0:
-            utils.save_on_master(save_dict, os.path.join(args.output_dir, f'checkpoint{epoch:04}.pth'))
+            checkpoint_path = os.path.join(args.output_dir, f'checkpoint{epoch:04}.pth')
+            utils.save_on_master(save_dict, os.path.join(args.output_dir, checkpoint_path))
         log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
                      'epoch': epoch}
         if utils.is_main_process():
+            mlflow.log_metrics(log_stats, step=epoch)
             with (Path(args.output_dir) / "log.txt").open("a") as f:
                 f.write(json.dumps(log_stats) + "\n")
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
+    mlflow.log_metric("total_training_time", total_time)
     print('Training time {}'.format(total_time_str))
 
 
@@ -354,6 +389,14 @@ def train_one_epoch(student, teacher, teacher_without_ddp, dino_loss, data_loade
         metric_logger.update(loss=loss.item())
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
         metric_logger.update(wd=optimizer.param_groups[0]["weight_decay"])
+
+        if utils.is_main_process():
+            mlflow.log_metrics({
+                'loss': loss.item(),
+                'lr': optimizer.param_groups[0]["lr"],
+                'wd': optimizer.param_groups[0]["weight_decay"],
+            }, step=epoch * len(data_loader) + it)
+
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger)
@@ -468,4 +511,5 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser('DINO', parents=[get_args_parser()])
     args = parser.parse_args()
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
-    train_dino(args)
+    train_dino_with_mlflow(args)
+    # train_dino(args)
