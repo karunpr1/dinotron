@@ -236,7 +236,6 @@ class MLflowHook(HookBase):
             mlflow.enable_system_metrics_logging()
             mlflow.set_tracking_uri(self.cfg.MLFLOW.TRACKING_URI)
             mlflow.set_experiment(self.cfg.MLFLOW.EXPERIMENT_NAME)
-            mlflow.start_run(run_name=self.cfg.MLFLOW.RUN_NAME)
             mlflow.set_tag("mlflow.note.content", self.cfg.MLFLOW.RUN_DESCRIPTION)
             for k, v in self.cfg.items():
                 mlflow.log_param(k, v)
