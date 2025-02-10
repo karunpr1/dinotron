@@ -63,13 +63,14 @@ def main(cfg: DetectronConfig):
 
         trainer_func = trainers.get(cfg.params.trainer)
         if trainer_func:
-            logger.info(f"Starting training with {cfg.params.trainer.capitalize()} Trainer")
-            trainer_func(dtron_config, resume=cfg.params.resume)
-            logger.info(f"Training Completed")
-            logger.info(f"Loading files for evaluation.....")
-            load_config_file = os.path.join(detectron_output_dir, config_save_file)
-            eval_model(load_config_file, detectron_output_dir, test_dataset_name)
-            mlflow.end_run()
+            with mlflow.start_run(run_name=cfg.mlflow.run_name):
+                logger.info(f"Starting training with {cfg.params.trainer.capitalize()} Trainer")
+                trainer_func(dtron_config, resume=cfg.params.resume)
+                logger.info(f"Training Completed")
+                logger.info(f"Loading files for evaluation.....")
+                load_config_file = os.path.join(detectron_output_dir, config_save_file)
+                eval_model(load_config_file, detectron_output_dir, test_dataset_name)
+            mlflow.end_run(status="FINISHED")
         else:
             logger.error(f"Unknown trainer type: {cfg.params.trainer}")
 
