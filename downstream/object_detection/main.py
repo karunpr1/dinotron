@@ -25,9 +25,14 @@ def main(cfg: DetectronConfig):
     train_dataset_name = cfg.data.dataset_name + f"_{cfg.data.label_fraction}perc" + "_train"
     test_dataset_name = cfg.data.dataset_name + "_test"
     val_dataset_name = cfg.data.dataset_name + "_valid"
-    config_save_file = cfg.params.final_model_name + "_config.pkl"
+    config_save_file = cfg.paths.config_save_name + "_config.pkl"
 
-    dtron_config = get_train_cfg(config_file_path=cfg.paths.merge_config_file, pretrained_weights=cfg.paths.pretrained_weights,
+    if cfg.params.pretrain_method == "dino":
+        pretrained_weights = cfg.paths.pretrained_weights
+    else:
+        pretrained_weights = "detectron2://ImageNetPretrained/MSRA/R-50.pkl"
+
+    dtron_config = get_train_cfg(config_file_path=cfg.paths.merge_config_file, pretrained_weights=pretrained_weights,
                                  train_dataset_name=train_dataset_name, test_dataset_name=val_dataset_name,
                                  num_classes=cfg.data.num_classes, device=cfg.params.device, output_dir=detectron_output_dir,
                                  num_workers=cfg.data.num_workers, img_per_batch=cfg.solver.img_per_batch,
@@ -63,13 +68,14 @@ def main(cfg: DetectronConfig):
 
         trainer_func = trainers.get(cfg.params.trainer)
         if trainer_func:
-            with mlflow.start_run(run_name=cfg.mlflow.run_name):
-                logger.info(f"Starting training with {cfg.params.trainer.capitalize()} Trainer")
-                trainer_func(dtron_config, resume=cfg.params.resume)
-                logger.info(f"Training Completed")
-                logger.info(f"Loading files for evaluation.....")
-                load_config_file = os.path.join(detectron_output_dir, config_save_file)
-                eval_model(load_config_file, detectron_output_dir, test_dataset_name)
+            logger.info(f"Starting training with {cfg.params.trainer.capitalize()} Trainer")
+            trainer_func(dtron_config, resume=cfg.params.resume)
+            logger.info(f"Training Completed")
+            logger.info(f"Loading files for evaluation.....")
+            load_config_file = os.path.join(detectron_output_dir, config_save_file)
+            eval_model(load_config_file, detectron_output_dir, test_dataset_name, device=cfg.params.device)
+            mlflow.log_artifact(os.path.join(detectron_output_dir, "pr_curve.png"))
+            mlflow.log_artifact(os.path.join(detectron_output_dir, "training-log.txt"))
             mlflow.end_run(status="FINISHED")
         else:
             logger.error(f"Unknown trainer type: {cfg.params.trainer}")
