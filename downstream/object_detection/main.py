@@ -57,6 +57,7 @@ def main(cfg: DetectronConfig):
                      dataset_dir=cfg.paths.validation_image_path, classes=cfg.data.classes, mode=cfg.data.register_dataset)
     display_dataset_details(train_dataset_name)
     display_dataset_details(val_dataset_name)
+    plot_samples(train_dataset_name, 3)
 
     logger.info(f"Saving model files to path: {detectron_output_dir}")
 
@@ -65,7 +66,6 @@ def main(cfg: DetectronConfig):
             "default": train_with_default_trainer,
             "custom": train_with_custom_trainer,
         }
-
         trainer_func = trainers.get(cfg.params.trainer)
         if trainer_func:
             logger.info(f"Starting training with {cfg.params.trainer.capitalize()} Trainer")
@@ -76,6 +76,7 @@ def main(cfg: DetectronConfig):
             eval_model(load_config_file, detectron_output_dir, test_dataset_name, device=cfg.params.device)
             mlflow.log_artifact(os.path.join(detectron_output_dir, "pr_curve.png"))
             mlflow.log_artifact(os.path.join(detectron_output_dir, "training-log.txt"))
+            mlflow.log_artifact(os.path.join(detectron_output_dir, config_save_file))
             mlflow.end_run(status="FINISHED")
         else:
             logger.error(f"Unknown trainer type: {cfg.params.trainer}")
