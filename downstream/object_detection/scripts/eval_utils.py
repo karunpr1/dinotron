@@ -1,190 +1,316 @@
 import os
 import pickle
+import mlflow
 import torch
 import numpy as np
 import cv2
 import matplotlib.pyplot as plt
 
 
-def compute_iou(boxA, boxB):
+def compute_iou(pred_box, gt_boxes):
     """
-    Computes Intersection over Union (IoU) between two bounding boxes.
-    Boxes are expected in [x1, y1, x2, y2] format.
-    """
-    xA = max(boxA[0], boxB[0])
-    yA = max(boxA[1], boxB[1])
-    xB = min(boxA[2], boxB[2])
-    yB = min(boxA[3], boxB[3])
+    Compute IoU between a single predicted box and an array of ground truth boxes.
 
-    # Compute intersection area
-    interW = max(0, xB - xA + 1)
-    interH = max(0, yB - yA + 1)
+    Args:
+        pred_box (list or np.ndarray): [x1, y1, x2, y2] for the predicted box.
+        gt_boxes (np.ndarray): Array of shape (N, 4) containing GT boxes in [x1, y1, x2, y2] format.
+
+    Returns:
+        np.ndarray: Array of IoU values between pred_box and each of the gt_boxes.
+    """
+    if len(gt_boxes) == 0:
+        return np.array([])
+
+    xA = np.maximum(pred_box[0], gt_boxes[:, 0])
+    yA = np.maximum(pred_box[1], gt_boxes[:, 1])
+    xB = np.minimum(pred_box[2], gt_boxes[:, 2])
+    yB = np.minimum(pred_box[3], gt_boxes[:, 3])
+    interW = np.maximum(0, xB - xA)
+    interH = np.maximum(0, yB - yA)
     interArea = interW * interH
 
-    # Compute areas of each box
-    boxAArea = (boxA[2] - boxA[0] + 1) * (boxA[3] - boxA[1] + 1)
-    boxBArea = (boxB[2] - boxB[0] + 1) * (boxB[3] - boxB[1] + 1)
-
-    # Compute IoU
-    iou = interArea / float(boxAArea + boxBArea - interArea)
-    return iou
+    boxArea = (pred_box[2] - pred_box[0]) * (pred_box[3] - pred_box[1])
+    gtAreas = (gt_boxes[:, 2] - gt_boxes[:, 0]) * (gt_boxes[:, 3] - gt_boxes[:, 1])
+    unionArea = boxArea + gtAreas - interArea
+    return interArea / unionArea
 
 
-def evaluate_model_multithresh(model, dataset_dicts, device, score_threshold=0.5, iou_threshold=0.5):
+def compute_precision_recall_fixed_threshold(predictor, dataset_dicts, score_threshold=0.5, iou_threshold=0.5):
     """
-    Runs the model on all images in the dataset and computes
-    precision, recall, "accuracy" (TP/(TP+FP+FN)) and F1 score.
+    Compute precision and recall for a Detectron2 model on a test dataset using fixed score and IoU thresholds.
 
-    Parameters:
-      - model: the Detectron2 model.
-      - dataset_dicts: list of dicts (from the registered dataset) with keys "file_name" and "annotations".
-      - device: torch device to run inference on.
-      - score_threshold: minimum score for a prediction to be considered.
-      - iou_threshold: IoU threshold to match predictions to ground truth.
+    Args:
+        predictor (DefaultPredictor): The Detectron2 predictor (model) used for inference.
+        dataset_dicts (dict): test dataset dicts registered in Detectron2's DatasetCatalog.
+        score_threshold (float): Confidence score threshold to filter predictions.
+        iou_threshold (float): IoU threshold to consider a detection as a true positive.
 
     Returns:
-      precision, recall, accuracy, and F1 score.
+        tuple: (precision, recall, total_TP, total_FP, total_FN)
     """
-    TP = 0
-    FP = 0
-    FN = 0
+
+    # Initialize counters
+    total_TP = 0
+    total_FP = 0
+    total_FN = 0
 
     for d in dataset_dicts:
+        # Load image
         img = cv2.imread(d["file_name"])
         if img is None:
-            print(f"Warning: could not read image {d['file_name']}")
             continue
-        # BGR to RGB.
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
-        tensor_img = torch.as_tensor(img.transpose(2, 0, 1)).to(device)
-        inputs = [{"image": tensor_img}]
+        # Run inference
+        outputs = predictor(img)
+        pred_boxes = outputs["instances"].pred_boxes.tensor.cpu().numpy()
+        scores = outputs["instances"].scores.cpu().numpy()
 
-        with torch.no_grad():
-            outputs = model(inputs)
+        valid_idx = np.where(scores >= score_threshold)[0]
+        pred_boxes = pred_boxes[valid_idx]
+        scores = scores[valid_idx]
 
-        instances = outputs[0]["instances"].to("cpu")
-        if len(instances) == 0:
-            pred_boxes = np.array([])
-        else:
-            pred_boxes = instances.pred_boxes.tensor.numpy()
-            pred_scores = instances.scores.numpy()
-            keep = pred_scores >= score_threshold
-            pred_boxes = pred_boxes[keep]
-
-        # COCO format: [x, y, width, height]
+        # Convert GT boxes from COCO format ([x, y, w, h]) to [x1, y1, x2, y2]
         gt_boxes = []
-        for ann in d["annotations"]:
-            x1, y1, w, h = ann["bbox"]
-            gt_boxes.append([x1, y1, x1 + w, y1 + h])
+        for anno in d.get("annotations", []):
+            x, y, w, h = anno["bbox"]
+            gt_boxes.append([x, y, x + w, y + h])
         gt_boxes = np.array(gt_boxes)
 
-        matched_gt = set()
-        for pb in pred_boxes:
-            found_match = False
-            for i, gt in enumerate(gt_boxes):
-                if i in matched_gt:
-                    continue
-                iou = compute_iou(pb, gt)
-                if iou >= iou_threshold:
-                    TP += 1
-                    matched_gt.add(i)
-                    found_match = True
-                    break
-            if not found_match:
-                FP += 1
+        # For matching, mark each GT box as not detected initially
+        detected = np.zeros(len(gt_boxes), dtype=bool)
 
-        # Ground truth boxes not detected count as false negatives.
-        FN += (len(gt_boxes) - len(matched_gt))
+        # Process each prediction
+        for pred_box in pred_boxes:
+            if len(gt_boxes) == 0:
+                total_FP += 1
+                continue
 
-    # Compute metrics (guard against division by zero).
-    precision = TP / (TP + FP) if (TP + FP) > 0 else 0
-    recall = TP / (TP + FN) if (TP + FN) > 0 else 0
-    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
-    accuracy = TP / (TP + FP + FN) if (TP + FP + FN) > 0 else 0
+            ious = compute_iou(pred_box, gt_boxes)
+            max_iou = np.max(ious)
+            max_idx = np.argmax(ious)
 
-    return precision, recall, accuracy, f1
+            # If the best IoU exceeds the threshold and the corresponding GT box is not yet matched:
+            if max_iou >= iou_threshold and not detected[max_idx]:
+                total_TP += 1
+                detected[max_idx] = True
+            else:
+                total_FP += 1
+
+        # Any GT boxes that were not detected are counted as false negatives
+        total_FN += np.sum(~detected)
+
+    # Calculate precision and recall
+    precision = total_TP / (total_TP + total_FP) if (total_TP + total_FP) > 0 else 0
+    recall = total_TP / (total_TP + total_FN) if (total_TP + total_FN) > 0 else 0
+
+    return precision, recall, total_TP, total_FP, total_FN
 
 
-def evaluate_model_multithresh_per_class(model, dataset_dicts, device, score_threshold=0.5, iou_threshold=0.5):
+def compute_precision_recall_for_thresholds(predictor, dataset_dicts, test_output_dir, iou_threshold=0.5, plot=False):
     """
-    For each image, computes TP/FP/FN per class and then calculates
-    per-class precision and recall.
+    Compute precision and recall for a Detectron2 model over a test dataset
+
+    Args:
+        predictor (DefaultPredictor): The Detectron2 predictor used for inference.
+        dataset_dicts (list): Test dataset dictionaries from DatasetCatalog.
+        test_output_dir (str): Path of the output save directory
+        iou_threshold (float): IoU threshold to consider a detection as a true positive.
+        plot (bool): If True, plots the PR curve for each class.
 
     Returns:
-      A dictionary mapping each class ID to a tuple: (precision, recall)
+        tuple: (thresholds, recall_array, precision_array) where:
+            - thresholds (np.ndarray): The array of score thresholds used.
+            - recall_array (np.ndarray): The computed recall for each threshold.
+            - precision_array (np.ndarray): The computed precision for each threshold.
     """
-    per_class_counts = {}
+    thresholds = np.linspace(0.1, 0.9, 9)
+    precision_list = []
+    recall_list = []
 
-    for d in dataset_dicts:
-        for ann in d["annotations"]:
-            cid = ann["category_id"]
-            if cid not in per_class_counts:
-                per_class_counts[cid] = {"TP": 0, "FP": 0, "FN": 0}
+    for score_threshold in thresholds:
+        total_TP = 0
+        total_FP = 0
+        total_FN = 0
+
+        for d in dataset_dicts:
+            img = cv2.imread(d["file_name"])
+            if img is None:
+                continue
+
+            outputs = predictor(img)
+            pred_boxes = outputs["instances"].pred_boxes.tensor.cpu().numpy()
+            scores = outputs["instances"].scores.cpu().numpy()
+
+            valid_idx = np.where(scores >= score_threshold)[0]
+            pred_boxes = pred_boxes[valid_idx]
+            # Convert ground truth boxes from COCO format ([x, y, w, h]) to [x1, y1, x2, y2]
+            gt_boxes = []
+            for anno in d.get("annotations", []):
+                x, y, w, h = anno["bbox"]
+                gt_boxes.append([x, y, x + w, y + h])
+            gt_boxes = np.array(gt_boxes)
+
+            detected = np.zeros(len(gt_boxes), dtype=bool)
+
+            for pred_box in pred_boxes:
+                if len(gt_boxes) == 0:
+                    total_FP += 1
+                    continue
+
+                ious = compute_iou(pred_box, gt_boxes)
+                max_iou = np.max(ious)
+                max_idx = np.argmax(ious)
+                # If the best IoU exceeds the threshold and the corresponding GT box is not yet matched
+                if max_iou >= iou_threshold and not detected[max_idx]:
+                    total_TP += 1
+                    detected[max_idx] = True
+                else:
+                    total_FP += 1
+
+            total_FN += np.sum(~detected)
+
+        precision = total_TP / (total_TP + total_FP + 1e-10)
+        recall = total_TP / (total_TP + total_FN + 1e-10)
+        precision_list.append(precision)
+        recall_list.append(recall)
+
+    precision_array = np.array(precision_list)
+    recall_array = np.array(recall_list)
+
+    if plot:
+        plt.figure()
+        plt.plot(recall_array, precision_array, marker='o')
+        for i, th in enumerate(thresholds):
+            plt.text(recall_array[i], precision_array[i], f"{th:.1f}", fontsize=8, verticalalignment='bottom')
+        plt.xlabel('Recall')
+        plt.ylabel('Precision')
+        plt.title(f'Precision-Recall Curve (IoU = {iou_threshold:.2f})')
+        plt.grid(True)
+        overall_pr_plot_file = os.path.join(test_output_dir, f"PR_curve_overall@IoU_{iou_threshold:.2f}.png")
+        plt.savefig(overall_pr_plot_file)
+        mlflow.log_artifact(overall_pr_plot_file)
+
+    return thresholds, recall_array, precision_array
+
+
+def compute_precision_recall_for_thresholds_per_class(predictor, dataset_dicts, metadata, test_output_dir, iou_threshold=0.5, plot=True):
+    """
+    Compute precision and recall for each class in the dataset at fixed detection score thresholds.
+
+    Args:
+        predictor (DefaultPredictor): The Detectron2 predictor used for inference.
+        dataset_dicts (list): Test dataset dictionaries from DatasetCatalog.
+        metadata (Metadata): Metadata of the registered detectron test dataset
+        test_output_dir (str): Path of the output save directory
+        iou_threshold (float): IoU threshold to consider a detection as a true positive.
+        plot (bool): If True, plots the PR curve for each class.
+
+    Returns:
+        dict: A dictionary mapping each class ID to a tuple (thresholds, recall_array, precision_array),
+              where thresholds is an array of score thresholds, and recall_array and precision_array
+              are computed for each threshold.
+    """
+    thresholds_arr = np.linspace(0.1, 0.9, 9)
+    image_results = []
+    classes_set = set()
 
     for d in dataset_dicts:
         img = cv2.imread(d["file_name"])
         if img is None:
             continue
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        tensor_img = torch.as_tensor(img.transpose(2, 0, 1)).to(device)
-        inputs = [{"image": tensor_img}]
 
-        with torch.no_grad():
-            outputs = model(inputs)
+        outputs = predictor(img)
+        # Extract predicted boxes, scores, and classes (pred_classes is a tensor of class indices)
+        pred_boxes = outputs["instances"].pred_boxes.tensor.cpu().numpy()
+        pred_scores = outputs["instances"].scores.cpu().numpy()
+        pred_classes = outputs["instances"].pred_classes.cpu().numpy()
 
-        instances = outputs[0]["instances"].to("cpu")
-        if len(instances) == 0:
-            pred_boxes = np.array([])
-            pred_scores = np.array([])
-            pred_classes = np.array([])
-        else:
-            pred_boxes = instances.pred_boxes.tensor.numpy()
-            pred_scores = instances.scores.numpy()
-            pred_classes = instances.pred_classes.numpy()
-            keep = pred_scores >= score_threshold
-            pred_boxes = pred_boxes[keep]
-            pred_classes = pred_classes[keep]
-
-        # Group ground truth boxes by class.
+        # Expecting each annotation to have "bbox" (COCO format: [x, y, w, h]) and "category_id".
         gt_by_class = {}
-        for ann in d["annotations"]:
-            cid = ann["category_id"]
-            bbox = ann["bbox"]  # COCO format: [x, y, width, height]
-            bbox = [bbox[0], bbox[1], bbox[0] + bbox[2], bbox[1] + bbox[3]]
-            if cid not in gt_by_class:
-                gt_by_class[cid] = []
-            gt_by_class[cid].append(bbox)
+        for anno in d.get("annotations", []):
+            cls = anno["category_id"]
+            classes_set.add(cls)
+            x, y, w, h = anno["bbox"]
+            box = [x, y, x + w, y + h]
+            if cls not in gt_by_class:
+                gt_by_class[cls] = []
+            gt_by_class[cls].append(box)
+        for cls in gt_by_class:
+            gt_by_class[cls] = np.array(gt_by_class[cls])
 
-        classes_in_img = set(gt_by_class.keys()) | set(pred_classes.tolist())
+        pred_by_class = {}
+        for score, box, cls in zip(pred_scores, pred_boxes, pred_classes):
+            classes_set.add(cls)
+            if cls not in pred_by_class:
+                pred_by_class[cls] = []
+            pred_by_class[cls].append((score, box))
+        for cls in pred_by_class:
+            pred_by_class[cls].sort(key=lambda x: x[0], reverse=True)
 
-        for cid in classes_in_img:
-            idx = np.where(pred_classes == cid)[0]
-            pred_boxes_c = pred_boxes[idx] if len(idx) > 0 else []
-            gt_boxes_c = gt_by_class[cid] if cid in gt_by_class else []
+        image_results.append({
+            'gt': gt_by_class,
+            'pred': pred_by_class
+        })
 
-            matched = set()
-            for pb in pred_boxes_c:
-                found_match = False
-                for i, gt in enumerate(gt_boxes_c):
-                    if i in matched:
+    results = {}  # key: class, value: (thresholds, recall_array, precision_array)
+    for cls in sorted(classes_set):
+        precision_list = []
+        recall_list = []
+        for thresh in thresholds_arr:
+            total_TP = 0
+            total_FP = 0
+            total_FN = 0
+            for res in image_results:
+                gt_boxes = res['gt'].get(cls, np.empty((0, 4)))
+                pred_list = res['pred'].get(cls, [])
+                pred_filtered = [box for (score, box) in pred_list if score >= thresh]
+                detected = np.zeros(len(gt_boxes), dtype=bool)
+
+                for pred_box in pred_filtered:
+                    if len(gt_boxes) == 0:
+                        total_FP += 1
                         continue
-                    if compute_iou(pb, gt) >= iou_threshold:
-                        per_class_counts[cid]["TP"] += 1
-                        matched.add(i)
-                        found_match = True
-                        break
-                if not found_match:
-                    per_class_counts[cid]["FP"] += 1
-            per_class_counts[cid]["FN"] += (len(gt_boxes_c) - len(matched))
+                    ious = compute_iou(pred_box, gt_boxes)
+                    max_iou = np.max(ious) if ious.size > 0 else 0
+                    max_idx = np.argmax(ious) if ious.size > 0 else -1
 
-    # Compute precision and recall for each class.
-    per_class_metrics = {}
-    for cid, counts in per_class_counts.items():
-        TP = counts["TP"]
-        FP = counts["FP"]
-        FN = counts["FN"]
-        precision = TP / (TP + FP) if (TP + FP) > 0 else 0
-        recall = TP / (TP + FN) if (TP + FN) > 0 else 0
-        per_class_metrics[cid] = (precision, recall)
-    return per_class_metrics
+                    if max_iou >= iou_threshold and not detected[max_idx]:
+                        total_TP += 1
+                        detected[max_idx] = True
+                    else:
+                        total_FP += 1
+                # Ground truth boxes not detected are false negatives.
+                total_FN += np.sum(~detected)
+            prec = total_TP / (total_TP + total_FP + 1e-10) if (total_TP + total_FP) > 0 else 0.0
+            rec = total_TP / (total_TP + total_FN + 1e-10) if (total_TP + total_FN) > 0 else 0.0
+            precision_list.append(prec)
+            recall_list.append(rec)
+        precision_array = np.array(precision_list)
+        recall_array = np.array(recall_list)
+        results[cls] = (thresholds_arr, recall_array, precision_array)
+
+    # Plot the Precision-Recall curve
+    if plot:
+        plt.figure()
+        cmap = plt.get_cmap("tab10")
+        sorted_classes = sorted(results.keys())
+        for i, cls in enumerate(sorted_classes):
+            ths, rec_arr, prec_arr = results[cls]
+            color = cmap(i % 10)
+            if metadata is not None and hasattr(metadata, "thing_classes") and cls < len(metadata.thing_classes):
+                label = f"{metadata.thing_classes[cls]}"
+            else:
+                label = f"Class {cls}"
+            plt.plot(rec_arr, prec_arr, marker='o', color=color, label=label)
+            for j, th in enumerate(ths):
+                plt.text(rec_arr[j], prec_arr[j], f"{th:.1f}", fontsize=8, verticalalignment='bottom', color=color)
+        plt.xlabel('Recall')
+        plt.ylabel('Precision')
+        plt.title(f'Precision-Recall Curve per Class (IoU = {iou_threshold:.2f})')
+        plt.legend(loc='upper right')
+        plt.grid(True)
+        per_class_pr_plot_file = os.path.join(test_output_dir, f"PR_curve_per_class_IoU_{iou_threshold:.2f}.png")
+        plt.savefig(per_class_pr_plot_file)
+        mlflow.log_artifact(per_class_pr_plot_file)
+
+    return results
