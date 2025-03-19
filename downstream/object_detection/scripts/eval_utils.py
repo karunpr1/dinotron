@@ -193,7 +193,7 @@ def compute_precision_recall_for_thresholds(predictor, dataset_dicts, test_outpu
     return thresholds, recall_array, precision_array
 
 
-def compute_precision_recall_for_thresholds_per_class(predictor, dataset_dicts, metadata, test_output_dir, iou_threshold=0.5, plot=True):
+def compute_precision_recall_for_thresholds_per_class(predictor, dataset_dicts, metadata, test_output_dir, iou_threshold=0.5, plot=True, test=True):
     """
     Compute precision and recall for each class in the dataset at fixed detection score thresholds.
 
@@ -297,10 +297,17 @@ def compute_precision_recall_for_thresholds_per_class(predictor, dataset_dicts, 
         for i, cls in enumerate(sorted_classes):
             ths, rec_arr, prec_arr = results[cls]
             color = cmap(i % 10)
-            if metadata is not None and hasattr(metadata, "thing_classes") and cls < len(metadata.thing_classes):
-                label = f"{metadata.thing_classes[cls]}"
+            if test:
+                idx = int(cls)
+                if metadata is not None and hasattr(metadata, "thing_classes") and idx < len(metadata.thing_classes):
+                    label = metadata.thing_classes[idx]
+                else:
+                    label = f"Class {idx}"
             else:
-                label = f"Class {cls}"
+                if metadata is not None and hasattr(metadata, "thing_classes") and cls < len(metadata.thing_classes):
+                    label = f"{metadata.thing_classes[cls]}"
+                else:
+                    label = f"Class {cls}"
             plt.plot(rec_arr, prec_arr, marker='o', color=color, label=label)
             for j, th in enumerate(ths):
                 plt.text(rec_arr[j], prec_arr[j], f"{th:.1f}", fontsize=8, verticalalignment='bottom', color=color)

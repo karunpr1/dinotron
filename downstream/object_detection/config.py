@@ -69,6 +69,7 @@ class Evaluate:
     test_annotations: str
     config_file_path: str
     model_output_dir: str
+    eval_folder_name : str
     model_name: str
 
 @dataclass

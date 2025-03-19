@@ -73,9 +73,7 @@ def main(cfg: DetectronConfig):
             logger.info(f"Training Completed")
             logger.info(f"Loading files for evaluation.....")
             load_config_file = os.path.join(detectron_output_dir, config_save_file)
-            eval_model(load_config_file, detectron_output_dir, test_dataset_name, device=cfg.params.device)
-            mlflow.log_artifact(os.path.join(detectron_output_dir, "pr_curve.png"))
-            mlflow.log_artifact(os.path.join(detectron_output_dir, "training-log.txt"))
+            eval_model(load_config_file, detectron_output_dir, test_dataset_name)
             mlflow.log_artifact(os.path.join(detectron_output_dir, config_save_file))
             mlflow.end_run(status="FINISHED")
         else:

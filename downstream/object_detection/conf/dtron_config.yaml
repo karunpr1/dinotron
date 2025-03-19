@@ -55,4 +55,5 @@ evaluate:
  test_annotations :
  config_file_path :
  model_output_dir :
+ eval_folder_name :
  model_name : "model_final.pth"

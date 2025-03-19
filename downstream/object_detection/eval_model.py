@@ -68,7 +68,7 @@ def evaluate_model(config: DetectronConfig):
 
     predictor = DefaultPredictor(cfg)
 
-    test_output_dir = os.path.join(model_output_dir, "model_eval_verification")
+    test_output_dir = os.path.join(model_output_dir, f"{config.evaluate.eval_folder_name}")
     os.makedirs(test_output_dir, exist_ok=True)
 
     for idx, d in enumerate(random.sample(dataset_dicts, 20)):
@@ -155,7 +155,7 @@ def evaluate_model(config: DetectronConfig):
     }
 
     per_class_results = compute_precision_recall_for_thresholds_per_class(
-        predictor, dataset_dicts,metadata, test_output_dir, iou_threshold=0.5, plot=True
+        predictor, dataset_dicts,metadata, test_output_dir, iou_threshold=0.5, plot=True, test=False
     )
 
     per_class_metrics = {}
