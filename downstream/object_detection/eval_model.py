@@ -224,6 +224,7 @@ def evaluate_model(config: DetectronConfig):
         f.write("\n")
 
         f.write("COCO Evaluation:\n")
+        inference = {}
         formatted_inference = {k: (v if isinstance(v, (int, float)) else v)
                                for k, v in inference.items()}
         inference_yaml = yaml.dump(formatted_inference, default_flow_style=False)
