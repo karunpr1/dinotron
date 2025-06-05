@@ -23,6 +23,7 @@ def eval_model(config_file, detectron_output_dir, test_dataset_name):
         The function does not return a value; it logs metrics to MLflow and generates PR curve plots as side effects.
     """
 
+    random.seed(42)
     cfg = get_test_cfg(config_file)
     cfg.defrost()
     cfg.OUTPUT_DIR = detectron_output_dir
