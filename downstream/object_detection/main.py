@@ -12,6 +12,7 @@ cs.store(name="detectron_config", node=DetectronConfig)
 
 @hydra.main(config_path="conf", config_name="dtron_config", version_base=None)
 def main(cfg: DetectronConfig):
+    random.seed(42)
     detectron_output_dir = os.path.join("./detectron_output", cfg.paths.output_dir)
     if not os.path.exists(detectron_output_dir):
         os.makedirs(detectron_output_dir)
