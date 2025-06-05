@@ -1,1 +1,5 @@
 __pycache__
+mlruns
+downstream/object_detection/detectron2_log
+downstream/object_detection/detectron_output
+downstream/object_detection/pretrained_models

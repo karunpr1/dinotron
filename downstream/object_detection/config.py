@@ -62,6 +62,15 @@ class Mlfow:
     run_name: str
     run_description: str
 
+@dataclass
+class Evaluate:
+    test_dataset_name: str
+    test_images: str
+    test_annotations: str
+    config_file_path: str
+    model_output_dir: str
+    eval_folder_name : str
+    model_name: str
 
 @dataclass
 class DetectronConfig:
@@ -71,3 +80,4 @@ class DetectronConfig:
     model: Model
     solver: Solver
     mlflow: Mlfow
+    evaluate: Evaluate

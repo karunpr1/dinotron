@@ -1,48 +1,74 @@
-import matplotlib.pyplot as plt
+import random
+import mlflow
+import torch
+from detectron2.data import DatasetCatalog, MetadataCatalog
+from detectron2.data import build_detection_train_loader
+from detectron2.data.datasets import register_coco_instances
 from detectron2.engine import DefaultPredictor
-from .detectron_utils import *
-from .eval_utils import *
+from detectron2.utils.visualizer import Visualizer
 from detectron2.modeling import build_model
 from detectron2.checkpoint import DetectionCheckpointer
-import numpy as np
+import os
+import pickle
+from scripts.eval_utils import *
+from scripts.detectron_utils import *
+from config import DetectronConfig
+import hydra
+from hydra.core.config_store import ConfigStore
 import yaml
+import copy
 from tqdm import tqdm
+import numpy as np
 
+cs = ConfigStore.instance()
+cs.store(name="detectron_config", node=DetectronConfig)
 
-def eval_model(config_file, detectron_output_dir, test_dataset_name):
-    """
-    Evaluates the object detection model using standard evaluation metrics, logs the results to MLflow,
-    and plots precision-recall curves for further analysis.
-
-    Params
-    config_file (str): Path to the configuration file that defines the model architecture, training parameters, and evaluation settings.
-    detectron_output_dir (str) : Directory containing the output of the Detectron2 model (e.g., checkpoints, logs) to be used for evaluation.
-    test_dataset_name (str) : Name of the test dataset registered in the DatasetCatalog on which the model evaluation will be performed.
-
-    Returns: None
-        The function does not return a value; it logs metrics to MLflow and generates PR curve plots as side effects.
-    """
-
+@hydra.main(config_path="conf", config_name="dtron_config", version_base=None)
+def evaluate_model(config: DetectronConfig):
     random.seed(42)
-    cfg = get_test_cfg(config_file)
-    cfg.defrost()
-    cfg.OUTPUT_DIR = detectron_output_dir
-    cfg.MODEL.WEIGHTS = os.path.join(detectron_output_dir, "model_final.pth")
-    cfg.freeze()
-    logger.info(f"Using {test_dataset_name} dataset for evaluating the final model.")
+    test_dataset_name = config.evaluate.test_dataset_name
+    test_annotations = config.evaluate.test_annotations
+    test_images = config.evaluate.test_images
+    device = config.params.device
+
+    mlflow.set_tracking_uri(config.mlflow.tracking_uri)
+    mlflow.set_experiment(config.mlflow.experiment_name)
+    mlflow.set_tag("mlflow.note.content", config.mlflow.run_description)
+    mlflow.set_tag("mlflow.runName", config.mlflow.run_name)
+
+    register_coco_instances(
+        test_dataset_name,
+        {},
+        test_annotations,
+        test_images
+    )
+
+    metadata = MetadataCatalog.get(test_dataset_name)
     dataset_dicts = DatasetCatalog.get(test_dataset_name)
+    thing_classes = metadata.thing_classes if hasattr(metadata, "thing_classes") else None
+    logger.info(metadata)
+    logger.info(dataset_dicts[0])
+    model_output_dir = config.evaluate.model_output_dir
+    model_name = config.evaluate.model_name
+    print(model_output_dir)
+
+    pickle_file_path = config.evaluate.config_file_path
+    with open(pickle_file_path, 'rb') as f:
+        cfg = pickle.load(f)
+    print(cfg)
+    cfg.defrost()
+    cfg.OUTPUT_DIR = model_output_dir
+    cfg.MODEL.WEIGHTS = os.path.join(model_output_dir, model_name)
+    cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = 0.5
+    cfg.freeze()
     model = build_model(cfg)
     checkpointer = DetectionCheckpointer(model)
     checkpointer.load(cfg.MODEL.WEIGHTS)
     model.eval()
-    logger.info("Detectron2 model loaded successfully!")
-
-    metadata = MetadataCatalog.get(test_dataset_name)
-    thing_classes = metadata.thing_classes if hasattr(metadata, "thing_classes") else None
 
     predictor = DefaultPredictor(cfg)
 
-    test_output_dir = os.path.join(detectron_output_dir, "model_eval")
+    test_output_dir = os.path.join(model_output_dir, f"{config.evaluate.eval_folder_name}")
     os.makedirs(test_output_dir, exist_ok=True)
 
     for idx, d in enumerate(random.sample(dataset_dicts, 20)):
@@ -76,7 +102,7 @@ def eval_model(config_file, detectron_output_dir, test_dataset_name):
 
     print(f"Images saved to {test_output_dir}")
 
-    evaluator = COCOEvaluator(dataset_name=test_dataset_name, output_dir=detectron_output_dir)
+    evaluator = COCOEvaluator(dataset_name=test_dataset_name, output_dir=model_output_dir)
     val_loader = build_detection_test_loader(cfg, test_dataset_name)
     inference = inference_on_dataset(predictor.model, val_loader, evaluator)
     print_csv_format(inference)
@@ -90,8 +116,7 @@ def eval_model(config_file, detectron_output_dir, test_dataset_name):
             )
 
     # Std eval metrics - overall @ 0.5
-    prec, rec, TP, FP, FN = compute_precision_recall_fixed_threshold(predictor, dataset_dicts, score_threshold=0.5,
-                                                                     iou_threshold=0.5)
+    prec, rec, TP, FP, FN = compute_precision_recall_fixed_threshold(predictor, dataset_dicts, score_threshold=0.5, iou_threshold=0.5)
     F1 = 2 * prec * rec / (prec + rec) if (prec + rec) > 0 else 0
     accuracy = TP / (TP + FP + FN) if (TP + FP + FN) > 0 else 0
 
@@ -130,14 +155,13 @@ def eval_model(config_file, detectron_output_dir, test_dataset_name):
     }
 
     per_class_results = compute_precision_recall_for_thresholds_per_class(
-        predictor, dataset_dicts, metadata, test_output_dir, iou_threshold=0.5, plot=True, test=True
+        predictor, dataset_dicts,metadata, test_output_dir, iou_threshold=0.5, plot=True, test=False
     )
 
     per_class_metrics = {}
     for cls, (ths, rec_arr, prec_arr) in per_class_results.items():
-        idx = int(cls)
-        if metadata is not None and hasattr(metadata, "thing_classes") and idx < len(metadata.thing_classes):
-            class_label = metadata.thing_classes[idx]
+        if metadata is not None and hasattr(metadata, "thing_classes") and cls < len(metadata.thing_classes):
+            class_label = metadata.thing_classes[cls]
         else:
             class_label = f"Class {cls}"
         per_class_metrics[class_label] = {
@@ -165,7 +189,7 @@ def eval_model(config_file, detectron_output_dir, test_dataset_name):
     yaml_file = os.path.join(test_output_dir, "test_eval_metrics.yaml")
 
     with open(yaml_file, "w") as f:
-        f.write("# <{} test evaluation>\n\n".format(detectron_output_dir))
+        f.write("# <{} test evaluation>\n\n".format(model_output_dir))
 
         # overall fixed-threshold metrics.
         f.write("Standard Evaluation @ IoU=0.5:\n")
@@ -179,7 +203,7 @@ def eval_model(config_file, detectron_output_dir, test_dataset_name):
             f.write(f"  {key}: {value}\n")
         f.write("\n")
 
-        # overall evaluation over multiple thresholds.
+        #overall evaluation over multiple thresholds.
         f.write("Standard Evaluation Overall (Multiple Score Thresholds):\n")
         for key, value in overall_metrics_multithresh.items():
             if isinstance(value, list):
@@ -200,6 +224,7 @@ def eval_model(config_file, detectron_output_dir, test_dataset_name):
         f.write("\n")
 
         f.write("COCO Evaluation:\n")
+        inference = {}
         formatted_inference = {k: (v if isinstance(v, (int, float)) else v)
                                for k, v in inference.items()}
         inference_yaml = yaml.dump(formatted_inference, default_flow_style=False)
@@ -207,5 +232,7 @@ def eval_model(config_file, detectron_output_dir, test_dataset_name):
 
     logger.info(f"Metrics saved to {yaml_file}")
     mlflow.log_artifact(yaml_file)
+    mlflow.end_run(status="FINISHED")
 
-
+if __name__ == '__main__':
+    evaluate_model()

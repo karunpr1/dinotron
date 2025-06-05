@@ -156,7 +156,7 @@ def train_dino_with_mlflow(args):
 
         # Train the DINO model and log metrics
         train_dino(args)
-        mlflow.log_artifacts(args.output_dir)
+        mlflow.log_artifact(os.path.join(args.output_dir, "log.txt"))
     print("Training completed. Metrics and artifacts logged to MLflow.")
     mlflow.end_run(status='FINISHED')
 
